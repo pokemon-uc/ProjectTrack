@@ -1,242 +1,749 @@
-import { useState, useEffect } from 'react';
-import api from '../api/axios';
-import DashboardLayout from '../components/DashboardLayout';
-import StatCard from '../components/StatCard';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 
-// backend responses may be an array OR { key: [...] } — handle both
-const asArray = (data, key) => {
-  if (Array.isArray(data)) return data;
-  if (data && Array.isArray(data[key])) return data[key];
-  return [];
+import { useNavigate } from "react-router-dom";
+
+import {
+  ArrowRight,
+  Bell,
+  FileClock,
+  Flag,
+  FolderKanban,
+  LoaderCircle,
+  MessageSquareText,
+  Plus,
+} from "lucide-react";
+
+import api from "../api/axios";
+import DashboardLayout from "../components/DashboardLayout";
+import StatusBadge from "../components/StatusBadge";
+
+import { useAuth } from "../context/AuthContext";
+import { useToast } from "../context/ToastContext";
+
+const EMPTY_COMPLETION = {
+  total: 0,
+  completed: 0,
+  completion: "0%",
 };
 
-function StudentDashboard() {
-  const [active, setActive] = useState('projects');
-  const [projects, setProjects] = useState([]);
-  const [selected, setSelected] = useState(null);
-  const [milestones, setMilestones] = useState([]);
-  const [completion, setCompletion] = useState(0);
-  const [notifications, setNotifications] = useState([]);
-  const [unread, setUnread] = useState(0);
-  const [msg, setMsg] = useState('');
+export default function StudentDashboard() {
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const { addToast } = useToast();
 
-  const [newProject, setNewProject] = useState({ title: '', description: '' });
-  const [newMilestone, setNewMilestone] = useState({ title: '', description: '', deadline: '' });
-  const [file, setFile] = useState(null);
-  const [fileType, setFileType] = useState('proposal');
+  const [project, setProject] =
+    useState(null);
 
-  const loadProjects = async () => {
+  const [completion, setCompletion] =
+    useState(EMPTY_COMPLETION);
+
+  const [submissions, setSubmissions] =
+    useState([]);
+
+  const [unreadCount, setUnreadCount] =
+    useState(0);
+
+  const [
+    latestFeedback,
+    setLatestFeedback,
+  ] = useState(null);
+
+  const [loading, setLoading] =
+    useState(true);
+
+  const [error, setError] =
+    useState("");
+
+  const [showForm, setShowForm] =
+    useState(false);
+
+  const [creating, setCreating] =
+    useState(false);
+
+  const [form, setForm] = useState({
+    title: "",
+    description: "",
+  });
+
+  const loadDashboard =
+    useCallback(async () => {
+      setLoading(true);
+      setError("");
+
+      try {
+        const [
+          projectsResponse,
+          notificationsResponse,
+        ] = await Promise.all([
+          api.get("/projects/mine"),
+          api.get("/notifications"),
+        ]);
+
+        const projects =
+          projectsResponse.data.projects ??
+          [];
+
+        const activeProject =
+          projects.find(
+            (item) =>
+              ![
+                "completed",
+                "rejected",
+              ].includes(item.status)
+          ) ??
+          projects[0] ??
+          null;
+
+        setProject(activeProject);
+
+        setUnreadCount(
+          Number(
+            notificationsResponse.data
+              .unread ?? 0
+          )
+        );
+
+        if (!activeProject) {
+          setCompletion(
+            EMPTY_COMPLETION
+          );
+
+          setSubmissions([]);
+          setLatestFeedback(null);
+
+          return;
+        }
+
+        const [
+          completionResponse,
+          submissionsResponse,
+        ] = await Promise.all([
+          api.get(
+            `/projects/${activeProject.id}/completion`
+          ),
+
+          api.get(
+            `/projects/${activeProject.id}/submissions`
+          ),
+        ]);
+
+        const loadedSubmissions =
+          submissionsResponse.data
+            .submissions ?? [];
+
+        setCompletion(
+          completionResponse.data ??
+            EMPTY_COMPLETION
+        );
+
+        setSubmissions(
+          loadedSubmissions
+        );
+
+        if (
+          loadedSubmissions.length === 0
+        ) {
+          setLatestFeedback(null);
+          return;
+        }
+
+        const feedbackResults =
+          await Promise.allSettled(
+            loadedSubmissions.map(
+              (submission) =>
+                api.get(
+                  `/submissions/${submission.id}/feedback`
+                )
+            )
+          );
+
+        const feedback =
+          feedbackResults
+            .filter(
+              (result) =>
+                result.status ===
+                "fulfilled"
+            )
+            .flatMap(
+              (result) =>
+                result.value.data
+                  .feedback ?? []
+            )
+            .sort(
+              (first, second) =>
+                new Date(
+                  second.created_at
+                ) -
+                new Date(
+                  first.created_at
+                )
+            );
+
+        setLatestFeedback(
+          feedback[0] ?? null
+        );
+      } catch (requestError) {
+        setError(
+          requestError.response?.data
+            ?.error ||
+            requestError.response?.data
+              ?.message ||
+            "Unable to load your dashboard."
+        );
+      } finally {
+        setLoading(false);
+      }
+    }, []);
+
+  useEffect(() => {
+    loadDashboard();
+  }, [loadDashboard]);
+
+  const latestSubmission =
+    useMemo(() => {
+      return (
+        [...submissions].sort(
+          (first, second) =>
+            new Date(
+              second.submitted_at
+            ) -
+            new Date(
+              first.submitted_at
+            )
+        )[0] ?? null
+      );
+    }, [submissions]);
+
+  const progress = useMemo(() => {
+    if (
+      typeof completion.completion ===
+      "string"
+    ) {
+      return (
+        Number(
+          completion.completion.replace(
+            "%",
+            ""
+          )
+        ) || 0
+      );
+    }
+
+    const total = Number(
+      completion.total || 0
+    );
+
+    if (!total) return 0;
+
+    return Math.round(
+      (Number(
+        completion.completed || 0
+      ) /
+        total) *
+        100
+    );
+  }, [completion]);
+
+  async function createProject(event) {
+    event.preventDefault();
+
+    if (!form.title.trim()) {
+      addToast(
+        "Enter a project title.",
+        "error"
+      );
+
+      return;
+    }
+
+    setCreating(true);
+
     try {
-      const res = await api.get('/projects/mine');
-      setProjects(asArray(res.data, 'projects'));
-    } catch (e) { setMsg(e.response?.data?.error || 'Failed to load projects'); }
-  };
-
-  const loadNotifications = async () => {
-    try {
-      const res = await api.get('/notifications');
-      setNotifications(asArray(res.data, 'notifications'));
-      setUnread(res.data.unread ?? 0);
-    } catch { /* ignore */ }
-  };
-
-  useEffect(() => { loadProjects(); loadNotifications(); }, []);
-
-  const openProject = async (p) => {
-    setSelected(p);
-    setActive('detail');
-    setMsg('');
-    try {
-      const [m, c] = await Promise.all([
-        api.get(`/projects/${p.id}/milestones`),
-        api.get(`/projects/${p.id}/completion`),
-      ]);
-      setMilestones(asArray(m.data, 'milestones'));
-      const cData = c.data;
-const raw = typeof cData === 'number' ? cData
-  : (cData.completion ?? cData.percent ?? cData.completionPercentage ?? cData.progress ?? 0);
-const pct = parseFloat(String(raw)) || 0;
-setCompletion(pct);
-    } catch (e) { setMsg(e.response?.data?.error || 'Failed to load project'); }
-  };
-
-  const createProject = async (e) => {
-    e.preventDefault();
-    setMsg('');
-    try {
-      await api.post('/projects', newProject);
-      setNewProject({ title: '', description: '' });
-      setMsg('Project created!');
-      await loadProjects();
-      setActive('projects');
-    } catch (e) { setMsg(e.response?.data?.error || 'Failed to create'); }
-  };
-
-  const addMilestone = async (e) => {
-    e.preventDefault();
-    try {
-      await api.post(`/projects/${selected.id}/milestones`, newMilestone);
-      setNewMilestone({ title: '', description: '', deadline: '' });
-      await openProject(selected);
-    } catch (e) { setMsg(e.response?.data?.error || 'Failed to add milestone'); }
-  };
-
-  const completeMilestone = async (mid) => {
-    try {
-      await api.put(`/milestones/${mid}/complete`);
-      await openProject(selected);
-      await loadNotifications();
-    } catch (e) { setMsg(e.response?.data?.error || 'Failed'); }
-  };
-
-  const uploadFile = async (e) => {
-    e.preventDefault();
-    if (!file) { setMsg('Choose a file first'); return; }
-    const fd = new FormData();
-    fd.append('file', file);
-    fd.append('type', fileType);
-    try {
-      await api.post(`/projects/${selected.id}/submissions`, fd, {
-        headers: { 'Content-Type': 'multipart/form-data' },
+      await api.post("/projects", {
+        title: form.title.trim(),
+        description:
+          form.description.trim(),
       });
-      setFile(null);
-      setMsg('File uploaded!');
-    } catch (e) { setMsg(e.response?.data?.error || 'Upload failed'); }
-  };
 
-  const submitProject = async () => {
-    try {
-      await api.put(`/projects/${selected.id}/submit`);
-      setMsg('Project submitted!');
-      await loadProjects();
-    } catch (e) { setMsg(e.response?.data?.error || 'Submit failed'); }
-  };
+      setForm({
+        title: "",
+        description: "",
+      });
 
-  const markRead = async (id) => {
-    try { await api.put(`/notifications/${id}/read`); await loadNotifications(); } catch { /* ignore */ }
-  };
+      setShowForm(false);
 
-  const links = [
-    { key: 'projects', label: 'My Projects' },
-    { key: 'new', label: 'New Project' },
-    { key: 'notifications', label: `Notifications${unread ? ` (${unread})` : ''}` },
-  ];
+      addToast(
+        "Project created successfully!",
+        "success"
+      );
+
+      await loadDashboard();
+    } catch (requestError) {
+      addToast(
+        requestError.response?.data
+          ?.error ||
+          "Unable to create the project.",
+        "error"
+      );
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  const firstName =
+    user?.name
+      ?.trim()
+      ?.split(" ")[0] ||
+    "Student";
+
+  const projectPath = project
+    ? `/projects/${project.id}`
+    : null;
 
   return (
-    <DashboardLayout title="Student Dashboard" links={links} active={active} onNavigate={setActive}>
-      {msg && <p className="bg-blue-50 text-blue-700 text-sm rounded p-2 mb-4">{msg}</p>}
-
-      {active === 'projects' && (
-        <>
-          <div className="flex flex-wrap gap-4 mb-6">
-            <StatCard value={projects.length} label="My Projects" />
-            <StatCard value={unread} label="Unread Alerts" />
-          </div>
-          <div className="bg-white border border-slate-200 rounded-lg p-4">
-            <h3 className="font-semibold text-slate-700 mb-3">My Projects</h3>
-            {projects.length === 0 ? <p className="text-slate-500 text-sm">No projects yet.</p> : (
-              <table className="w-full text-sm">
-                <thead><tr className="text-left text-slate-500 border-b"><th className="py-2">Title</th><th>Status</th><th></th></tr></thead>
-                <tbody>
-                  {projects.map((p) => (
-                    <tr key={p.id} className="border-b last:border-0">
-                      <td className="py-2">{p.title}</td>
-                      <td className="capitalize">{p.status}</td>
-                      <td className="text-right"><button onClick={() => openProject(p)} className="text-blue-600 hover:underline">Open</button></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </>
-      )}
-
-      {active === 'new' && (
-        <div className="bg-white border border-slate-200 rounded-lg p-6 max-w-md">
-          <h3 className="font-semibold text-slate-700 mb-3">Create New Project</h3>
-          <form onSubmit={createProject} className="space-y-3">
-            <input value={newProject.title} onChange={(e) => setNewProject({ ...newProject, title: e.target.value })}
-              placeholder="Project title" className="w-full border border-slate-300 rounded px-3 py-2" required />
-            <textarea value={newProject.description} onChange={(e) => setNewProject({ ...newProject, description: e.target.value })}
-              placeholder="Description" className="w-full border border-slate-300 rounded px-3 py-2" rows="3" />
-            <button className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Create</button>
-          </form>
-        </div>
-      )}
-
-      {active === 'detail' && selected && (
-        <div className="space-y-6">
-          <div className="flex flex-wrap gap-4">
-            <StatCard value={`${completion}%`} label="Completion" />
-            <StatCard value={selected.status} label="Status" />
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-lg p-4">
-            <h3 className="font-semibold text-slate-700 mb-3">{selected.title} — Milestones</h3>
-            {milestones.length === 0 ? <p className="text-slate-500 text-sm mb-4">No milestones yet.</p> : (
-              <table className="w-full text-sm mb-4">
-                <thead><tr className="text-left text-slate-500 border-b"><th className="py-2">Title</th><th>Status</th><th></th></tr></thead>
-                <tbody>
-                  {milestones.map((m) => (
-                    <tr key={m.id} className="border-b last:border-0">
-                      <td className="py-2">{m.title}</td>
-                      <td className="capitalize">{m.status}</td>
-                      <td className="text-right">
-                        {m.status !== 'completed' && <button onClick={() => completeMilestone(m.id)} className="text-blue-600 hover:underline">Mark complete</button>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-            <form onSubmit={addMilestone} className="flex flex-wrap gap-2 items-end">
-              <input value={newMilestone.title} onChange={(e) => setNewMilestone({ ...newMilestone, title: e.target.value })} placeholder="Milestone title" className="border border-slate-300 rounded px-3 py-2 text-sm" required />
-              <input type="date" value={newMilestone.deadline} onChange={(e) => setNewMilestone({ ...newMilestone, deadline: e.target.value })} className="border border-slate-300 rounded px-3 py-2 text-sm" />
-              <button className="bg-blue-600 text-white px-3 py-2 rounded text-sm hover:bg-blue-700">Add</button>
-            </form>
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-lg p-4">
-            <h3 className="font-semibold text-slate-700 mb-3">Upload File</h3>
-            <form onSubmit={uploadFile} className="flex flex-wrap gap-2 items-center">
-              <input type="file" onChange={(e) => setFile(e.target.files[0])} className="text-sm" />
-              <select value={fileType} onChange={(e) => setFileType(e.target.value)} className="border border-slate-300 rounded px-2 py-2 text-sm">
-                <option value="proposal">proposal</option>
-                <option value="milestone">milestone</option>
-                <option value="final_report">final_report</option>
-              </select>
-              <button className="bg-blue-600 text-white px-3 py-2 rounded text-sm hover:bg-blue-700">Upload</button>
-            </form>
-          </div>
-
+    <DashboardLayout
+      projectId={project?.id}
+    >
+      <div className="mx-auto max-w-6xl">
+        <header className="mb-7 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div>
-            <button onClick={submitProject} className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Submit Project</button>
-            <button onClick={() => setActive('projects')} className="ml-2 text-slate-600 hover:underline">Back</button>
-          </div>
-        </div>
-      )}
+            <p className="mb-2 text-xs font-bold uppercase tracking-[0.16em] text-[#4051c7]">
+              Student Dashboard
+            </p>
 
-      {active === 'notifications' && (
-        <div className="bg-white border border-slate-200 rounded-lg p-4">
-          <h3 className="font-semibold text-slate-700 mb-3">Notifications</h3>
-          {notifications.length === 0 ? <p className="text-slate-500 text-sm">No notifications.</p> : (
-            <ul className="space-y-2">
-              {notifications.map((n) => (
-                <li key={n.id} className={`border rounded p-3 text-sm flex justify-between ${n.is_read ? 'bg-slate-50' : 'bg-blue-50'}`}>
+            <h1 className="text-3xl font-bold tracking-tight text-[#111331] sm:text-4xl">
+              Welcome back, {firstName}!
+            </h1>
+
+            <p className="mt-2 text-sm text-slate-500">
+              Track your project,
+              submissions, and guide
+              feedback in one place.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() =>
+              setShowForm(
+                (current) => !current
+              )
+            }
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#4051c7] px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-200 transition hover:bg-[#3443bd]"
+          >
+            <Plus size={17} />
+
+            {showForm
+              ? "Cancel"
+              : "Create Project"}
+          </button>
+        </header>
+
+        {showForm && (
+          <form
+            onSubmit={createProject}
+            className="mb-5 rounded-[18px] border border-slate-200 bg-white p-5 shadow-[0_10px_35px_rgba(29,35,76,0.06)]"
+          >
+            <h2 className="font-bold text-[#111331]">
+              Create a new project
+            </h2>
+
+            <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_1.5fr_auto]">
+              <input
+                value={form.title}
+                onChange={(event) =>
+                  setForm(
+                    (current) => ({
+                      ...current,
+                      title:
+                        event.target
+                          .value,
+                    })
+                  )
+                }
+                placeholder="Project title"
+                className="h-11 rounded-xl border border-slate-200 px-4 text-sm outline-none transition focus:border-[#4051c7] focus:ring-4 focus:ring-indigo-100"
+              />
+
+              <input
+                value={
+                  form.description
+                }
+                onChange={(event) =>
+                  setForm(
+                    (current) => ({
+                      ...current,
+                      description:
+                        event.target
+                          .value,
+                    })
+                  )
+                }
+                placeholder="Short project description"
+                className="h-11 rounded-xl border border-slate-200 px-4 text-sm outline-none transition focus:border-[#4051c7] focus:ring-4 focus:ring-indigo-100"
+              />
+
+              <button
+                type="submit"
+                disabled={creating}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-[#111331] px-5 text-sm font-semibold text-white disabled:opacity-60"
+              >
+                {creating && (
+                  <LoaderCircle
+                    size={16}
+                    className="animate-spin"
+                  />
+                )}
+
+                {creating
+                  ? "Creating"
+                  : "Create"}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {loading && (
+          <DashboardSkeleton />
+        )}
+
+        {!loading && error && (
+          <div className="rounded-[18px] border border-red-200 bg-red-50 p-8 text-center">
+            <p className="font-semibold text-red-700">
+              {error}
+            </p>
+
+            <button
+              type="button"
+              onClick={loadDashboard}
+              className="mt-4 rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
+            >
+              Try again
+            </button>
+          </div>
+        )}
+
+        {!loading && !error && (
+          <>
+            <section className="grid gap-4 md:grid-cols-2">
+              <MetricCard
+                icon={FolderKanban}
+                label="Current Project"
+              >
+                <div className="flex items-start justify-between gap-4">
                   <div>
-                    <div className="font-medium text-slate-800">{n.title}</div>
-                    <div className="text-slate-600">{n.message}</div>
+                    <p className="text-xl font-bold text-[#111331]">
+                      {project?.title ||
+                        "No project created"}
+                    </p>
+
+                    <p className="mt-1 text-sm text-slate-500">
+                      {project
+                        ? "Continue managing your academic project."
+                        : "Create your first project to get started."}
+                    </p>
                   </div>
-                  {!n.is_read && <button onClick={() => markRead(n.id)} className="text-blue-600 hover:underline">Mark read</button>}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
+
+                  {project && (
+                    <StatusBadge
+                      status={
+                        project.status
+                      }
+                    />
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    projectPath
+                      ? navigate(
+                          projectPath
+                        )
+                      : setShowForm(true)
+                  }
+                  className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-[#4051c7]"
+                >
+                  {project
+                    ? "View project"
+                    : "Create project"}
+
+                  <ArrowRight
+                    size={16}
+                  />
+                </button>
+              </MetricCard>
+
+              <MetricCard
+                icon={Flag}
+                label="Milestones"
+              >
+                <div className="flex items-end justify-between">
+                  <p className="text-3xl font-bold text-[#111331]">
+                    {Number(
+                      completion.completed ||
+                        0
+                    )}
+                    /
+                    {Number(
+                      completion.total ||
+                        0
+                    )}
+                  </p>
+
+                  <span className="text-sm font-bold text-[#4051c7]">
+                    {progress}%
+                  </span>
+                </div>
+
+                <div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-[#4051c7] to-[#7282ed]"
+                    style={{
+                      width: `${Math.min(
+                        progress,
+                        100
+                      )}%`,
+                    }}
+                  />
+                </div>
+              </MetricCard>
+
+              <MetricCard
+                icon={FileClock}
+                label="Latest Version"
+              >
+                <p className="text-3xl font-bold text-[#111331]">
+                  {latestSubmission
+                    ? `V${latestSubmission.current_version}`
+                    : "No uploads"}
+                </p>
+
+                <p className="mt-2 text-sm capitalize text-slate-500">
+                  {latestSubmission
+                    ? String(
+                        latestSubmission.type
+                      ).replaceAll(
+                        "_",
+                        " "
+                      )
+                    : "Your latest report will appear here."}
+                </p>
+              </MetricCard>
+
+              <MetricCard
+                icon={Bell}
+                label="Unread Notifications"
+              >
+                <p className="text-3xl font-bold text-[#111331]">
+                  {unreadCount}
+                </p>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    navigate(
+                      "/notifications"
+                    )
+                  }
+                  className="mt-2 inline-flex items-center gap-2 text-sm font-semibold text-[#4051c7]"
+                >
+                  View notifications
+
+                  <ArrowRight
+                    size={16}
+                  />
+                </button>
+              </MetricCard>
+            </section>
+
+            <section className="mt-4 grid gap-4 lg:grid-cols-[1.45fr_0.75fr]">
+              <article className="rounded-[18px] border border-slate-200 bg-white p-6 shadow-[0_10px_35px_rgba(29,35,76,0.06)]">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-[#4051c7]">
+                    <MessageSquareText
+                      size={20}
+                    />
+                  </div>
+
+                  <h2 className="text-lg font-bold text-[#111331]">
+                    Latest Guide Feedback
+                  </h2>
+                </div>
+
+                {latestFeedback ? (
+                  <div className="mt-5 rounded-2xl bg-[#f7f8fd] p-5">
+                    <p className="leading-7 text-slate-700">
+                      “
+                      {latestFeedback.comments ||
+                        "Your guide reviewed this submission."}
+                      ”
+                    </p>
+
+                    <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-4 text-sm">
+                      <span className="font-semibold text-[#111331]">
+                        {latestFeedback.guide_name ||
+                          "Project guide"}
+                      </span>
+
+                      <span className="text-slate-400">
+                        {formatDate(
+                          latestFeedback.created_at
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-5 rounded-2xl border border-dashed border-slate-200 bg-[#fafbff] px-5 py-8 text-center">
+                    <p className="font-semibold text-[#111331]">
+                      No feedback yet
+                    </p>
+
+                    <p className="mt-1 text-sm text-slate-500">
+                      Guide feedback
+                      will appear after
+                      a submission is
+                      reviewed.
+                    </p>
+                  </div>
+                )}
+              </article>
+
+              <article className="rounded-[18px] bg-gradient-to-br from-[#4051c7] to-[#252d86] p-6 text-white shadow-[0_14px_38px_rgba(64,81,199,0.22)]">
+                <h2 className="text-lg font-bold">
+                  Quick Actions
+                </h2>
+
+                <p className="mt-1 text-sm text-indigo-100">
+                  Open the key areas of
+                  your project.
+                </p>
+
+                <div className="mt-5 space-y-2">
+                  <QuickAction
+                    label="Submit report"
+                    disabled={
+                      !projectPath
+                    }
+                    onClick={() =>
+                      navigate(
+                        `${projectPath}#submissions`
+                      )
+                    }
+                  />
+
+                  <QuickAction
+                    label="View milestones"
+                    disabled={
+                      !projectPath
+                    }
+                    onClick={() =>
+                      navigate(
+                        `${projectPath}#milestones`
+                      )
+                    }
+                  />
+
+                  <QuickAction
+                    label="Open discussion"
+                    disabled={
+                      !projectPath
+                    }
+                    onClick={() =>
+                      navigate(
+                        `${projectPath}#discussion`
+                      )
+                    }
+                  />
+                </div>
+              </article>
+            </section>
+          </>
+        )}
+      </div>
     </DashboardLayout>
   );
 }
 
-export default StudentDashboard;
+function MetricCard({
+  icon: Icon,
+  label,
+  children,
+}) {
+  return (
+    <article className="rounded-[18px] border border-slate-200 bg-white p-6 shadow-[0_10px_35px_rgba(29,35,76,0.06)] transition hover:-translate-y-0.5 hover:shadow-[0_14px_40px_rgba(29,35,76,0.09)]">
+      <div className="mb-5 flex items-center gap-3">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-[#4051c7]">
+          <Icon
+            size={20}
+            strokeWidth={1.8}
+          />
+        </div>
+
+        <p className="text-sm font-semibold text-slate-500">
+          {label}
+        </p>
+      </div>
+
+      {children}
+    </article>
+  );
+}
+
+function QuickAction({
+  label,
+  disabled,
+  onClick,
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className="flex w-full items-center justify-between rounded-xl bg-white/10 px-4 py-3 text-left text-sm font-semibold transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      {label}
+
+      <ArrowRight size={16} />
+    </button>
+  );
+}
+
+function DashboardSkeleton() {
+  return (
+    <div className="grid gap-4 md:grid-cols-2">
+      {[1, 2, 3, 4].map(
+        (item) => (
+          <div
+            key={item}
+            className="h-44 animate-pulse rounded-[18px] border border-slate-200 bg-white"
+          />
+        )
+      )}
+    </div>
+  );
+}
+
+function formatDate(value) {
+  if (!value) return "";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return new Intl.DateTimeFormat(
+    "en-IN",
+    {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    }
+  ).format(date);
+}
