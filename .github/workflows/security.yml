@@ -75,7 +75,7 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Scan repository
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -107,7 +107,7 @@ jobs:
         run: docker build -t projecttrack-${{ matrix.application }}:security ./${{ matrix.application }}
 
       - name: Scan container image
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: projecttrack-${{ matrix.application }}:security
           format: sarif
