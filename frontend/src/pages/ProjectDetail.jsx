@@ -7,8 +7,7 @@ import SkeletonCard from "../components/SkeletonCard";
 import { ErrorState } from "../components/EmptyState";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
-import { formatDateTime, formatDate, formatFileSize } from "../lib/formatters";
-
+import { formatDateTime, formatDate } from "../lib/formatters";
 export default function ProjectDetail() {
   const { id } = useParams();
   const location = useLocation();
@@ -79,20 +78,7 @@ export default function ProjectDetail() {
     }
   };
 
-  const giveFeedback = async (subId, status) => {
-    const comments = prompt(`Comments for "${status.replace(/_/g, " ")}":`);
-    try {
-      await api.post(`/submissions/${subId}/feedback`, {
-        status,
-        comments: comments || "",
-      });
-      addToast("Feedback saved", "success");
-      loadAll();
-    } catch {
-      addToast("Failed to save feedback", "error");
-    }
-  };
-
+  
   if (loading) {
     return (
       <DashboardLayout projectId={id}>
