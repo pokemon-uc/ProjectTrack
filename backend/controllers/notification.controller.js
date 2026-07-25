@@ -1,33 +1,49 @@
 const {
-  getNotificationsByUser, getUnreadCount, markAsRead, markAllAsRead,
-} = require('../models/notification.model');
+  getNotificationsByUser,
+  getUnreadCount,
+  markAsRead,
+  markAllAsRead,
+} = require("../models/notification.model");
 
-// my notifications + unread count (the bell 🔔)
 const getMyNotifications = async (req, res) => {
   try {
-    const notifications = await getNotificationsByUser(req.user.id);
-    const unread = await getUnreadCount(req.user.id);
-    res.json({ unread: Number(unread), notifications });
+    const [notifications, unread] = await Promise.all([
+      getNotificationsByUser(req.user.id),
+      getUnreadCount(req.user.id),
+    ]);
+    return res.json({ unread: Number(unread), notifications });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error(err);
+    return res.status(500).json({ error: "Unable to load notifications" });
   }
 };
 
 const readOne = async (req, res) => {
   try {
-    const notification = await markAsRead(req.params.id);
-    res.json({ message: 'Marked as read', notification });
+    const notificationId = Number(req.params.id);
+    if (!Number.isInteger(notificationId) || notificationId <= 0) {
+      return res.status(400).json({ error: "Invalid notification ID" });
+    }
+
+    const notification = await markAsRead(notificationId, req.user.id);
+    if (!notification) {
+      return res.status(404).json({ error: "Notification not found" });
+    }
+
+    return res.json({ message: "Marked as read", notification });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error(err);
+    return res.status(500).json({ error: "Unable to update notification" });
   }
 };
 
 const readAll = async (req, res) => {
   try {
     await markAllAsRead(req.user.id);
-    res.json({ message: 'All marked as read' });
+    return res.json({ message: "All marked as read" });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error(err);
+    return res.status(500).json({ error: "Unable to update notifications" });
   }
 };
 

@@ -5,7 +5,7 @@
 **/.env
 **/.env.*
 !**/.env.example
-
+!**/.env.docker.example
 # User uploads and generated files
 backend/uploads/*
 !backend/uploads/.gitkeep

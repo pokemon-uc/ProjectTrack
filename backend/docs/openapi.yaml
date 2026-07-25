@@ -1,0 +1,503 @@
+openapi: 3.0.3
+info:
+  title: ProjectTrack API
+  version: 1.0.0
+  description: |
+    Secure role-based API for academic project submissions, milestones,
+    discussions, feedback, notifications, grading, and analytics.
+servers:
+  - url: http://localhost:5000
+    description: Local development
+security:
+  - bearerAuth: []
+tags:
+  - name: Authentication
+  - name: Projects
+  - name: Submissions
+  - name: Milestones
+  - name: Feedback
+  - name: Discussions
+  - name: Notifications
+  - name: Grades
+  - name: Analytics
+  - name: System
+paths:
+  /api/auth/register:
+    post:
+      tags: [Authentication]
+      security: []
+      summary: Register a Student account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201': { description: Student account created }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { description: Privileged public registration rejected }
+        '409': { description: Email already registered }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /api/auth/login:
+    post:
+      tags: [Authentication]
+      security: []
+      summary: Login with email and password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+  /api/auth/me:
+    get:
+      tags: [Authentication]
+      summary: Get the authenticated user
+      responses:
+        '200': { description: Current user }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/projects:
+    post:
+      tags: [Projects]
+      summary: Create a Student project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string }
+                description: { type: string, nullable: true }
+      responses:
+        '201': { description: Project created }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/projects/mine:
+    get:
+      tags: [Projects]
+      summary: List the Student's projects
+      responses:
+        '200': { description: Project list }
+  /api/projects/assigned:
+    get:
+      tags: [Projects]
+      summary: List projects assigned to the Guide
+      responses:
+        '200': { description: Assigned project list }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/projects/all:
+    get:
+      tags: [Projects]
+      summary: List all projects for the Coordinator
+      responses:
+        '200': { description: Complete project list }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/projects/guides:
+    get:
+      tags: [Projects]
+      summary: List Guides for assignment
+      responses:
+        '200': { description: Guide list }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/projects/{projectId}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [Projects]
+      summary: Get a project accessible to the requester
+      responses:
+        '200': { description: Project details }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/projects/{projectId}/assign-guide:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    put:
+      tags: [Projects]
+      summary: Assign a Guide as Coordinator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [guide_id]
+              properties:
+                guide_id: { type: integer }
+      responses:
+        '200': { description: Guide assigned }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/projects/{projectId}/submit:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    put:
+      tags: [Projects]
+      summary: Submit the Student's project for review
+      responses:
+        '200': { description: Project submitted }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/projects/{projectId}/status-history:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [Projects]
+      summary: View the accessible project's status history
+      responses:
+        '200': { description: Status history }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/projects/{projectId}/submissions:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [Submissions]
+      summary: List submissions for an accessible project
+      responses:
+        '200': { description: Submission list }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Submissions]
+      summary: Upload a new Student submission version
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, type]
+              properties:
+                file: { type: string, format: binary }
+                type:
+                  type: string
+                  enum: [proposal, milestone, final_report]
+                milestone_id: { type: integer, nullable: true }
+                notes: { type: string, nullable: true }
+      responses:
+        '201': { description: Submission version created }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/submissions/{submissionId}/versions:
+    parameters:
+      - $ref: '#/components/parameters/SubmissionId'
+    get:
+      tags: [Submissions]
+      summary: List protected submission versions
+      responses:
+        '200': { description: Version list without storage paths }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/submission-versions/{versionId}/download:
+    parameters:
+      - name: versionId
+        in: path
+        required: true
+        schema: { type: integer }
+    get:
+      tags: [Submissions]
+      summary: Download a version after project-membership verification
+      responses:
+        '200':
+          description: Protected report file
+          content:
+            application/pdf: { schema: { type: string, format: binary } }
+            application/msword: { schema: { type: string, format: binary } }
+            application/vnd.openxmlformats-officedocument.wordprocessingml.document: { schema: { type: string, format: binary } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/projects/{projectId}/milestones:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [Milestones]
+      summary: List milestones for an accessible project
+      responses:
+        '200': { description: Milestone list }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Milestones]
+      summary: Add a milestone as assigned Guide or Coordinator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string }
+                description: { type: string, nullable: true }
+                deadline: { type: string, format: date-time, nullable: true }
+      responses:
+        '201': { description: Milestone added }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/milestones/{milestoneId}/submit:
+    parameters:
+      - $ref: '#/components/parameters/MilestoneId'
+    put:
+      tags: [Milestones]
+      summary: Submit a milestone as its Student owner
+      responses:
+        '200': { description: Milestone submitted }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/milestones/{milestoneId}/review:
+    parameters:
+      - $ref: '#/components/parameters/MilestoneId'
+    put:
+      tags: [Milestones]
+      summary: Review as assigned Guide or Coordinator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [completed, revision_needed]
+      responses:
+        '200': { description: Milestone reviewed }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/projects/{projectId}/completion:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [Milestones]
+      summary: Get project milestone completion
+      responses:
+        '200': { description: Completion statistics }
+  /api/submissions/{submissionId}/feedback:
+    parameters:
+      - $ref: '#/components/parameters/SubmissionId'
+    get:
+      tags: [Feedback]
+      summary: Read feedback after project-membership verification
+      responses:
+        '200': { description: Feedback list }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Feedback]
+      summary: Give feedback as the assigned Guide
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [approved, rejected, revision_needed]
+                comments: { type: string, nullable: true, maxLength: 5000 }
+      responses:
+        '201': { description: Feedback submitted }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/projects/{projectId}/threads:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [Discussions]
+      summary: List accessible project discussions
+      responses:
+        '200': { description: Discussion threads }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Discussions]
+      summary: Create a discussion thread as a project member
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string, maxLength: 200 }
+      responses:
+        '201': { description: Thread created }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/threads/{threadId}/replies:
+    parameters:
+      - name: threadId
+        in: path
+        required: true
+        schema: { type: integer }
+    get:
+      tags: [Discussions]
+      summary: Read replies as a project member
+      responses:
+        '200': { description: Discussion replies }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Discussions]
+      summary: Reply as a project member
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: { type: string, maxLength: 5000 }
+      responses:
+        '201': { description: Reply created }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/notifications:
+    get:
+      tags: [Notifications]
+      summary: List only the authenticated user's notifications
+      responses:
+        '200': { description: Notifications and unread count }
+  /api/notifications/read-all:
+    put:
+      tags: [Notifications]
+      summary: Mark all of the authenticated user's notifications read
+      responses:
+        '200': { description: Notifications updated }
+  /api/notifications/{notificationId}/read:
+    parameters:
+      - name: notificationId
+        in: path
+        required: true
+        schema: { type: integer }
+    put:
+      tags: [Notifications]
+      summary: Mark an owned notification read
+      responses:
+        '200': { description: Notification updated }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/projects/{projectId}/grade:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [Grades]
+      summary: View a grade for an accessible project
+      responses:
+        '200': { description: Project grade }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Grades]
+      summary: Record final grade as Coordinator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [score]
+              properties:
+                score: { type: number, minimum: 0, maximum: 100 }
+                remarks: { type: string, nullable: true }
+      responses:
+        '201': { description: Final grade saved }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/analytics/dashboard:
+    get:
+      tags: [Analytics]
+      summary: Get Coordinator analytics dashboard
+      responses:
+        '200': { description: Analytics dashboard }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/health:
+    get:
+      tags: [System]
+      security: []
+      summary: Check API, PostgreSQL, and Redis status
+      responses:
+        '200': { description: Services available }
+        '503': { description: Database unavailable }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      schema: { type: integer }
+    SubmissionId:
+      name: submissionId
+      in: path
+      required: true
+      schema: { type: integer }
+    MilestoneId:
+      name: milestoneId
+      in: path
+      required: true
+      schema: { type: integer }
+  schemas:
+    RegisterRequest:
+      type: object
+      required: [name, email, password]
+      properties:
+        name: { type: string, minLength: 2, maxLength: 120 }
+        email: { type: string, format: email, maxLength: 160 }
+        password: { type: string, minLength: 8, format: password }
+        department: { type: string, nullable: true }
+        role:
+          type: string
+          enum: [student]
+          description: Public registration is always Student-only.
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, format: password }
+    LoginResponse:
+      type: object
+      properties:
+        message: { type: string }
+        token: { type: string }
+        user:
+          type: object
+          properties:
+            id: { type: integer }
+            name: { type: string }
+            email: { type: string }
+            role: { type: string, enum: [student, guide, coordinator] }
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Missing or invalid JWT
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Authenticated but not authorized
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: Too many authentication requests
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
