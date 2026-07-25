@@ -1,0 +1,68 @@
+name: Deploy to Azure VM
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: projecttrack-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy Docker Compose stack
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       vars.AZURE_DEPLOY_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.AZURE_VM_HOST }}
+          username: ${{ secrets.AZURE_VM_USER }}
+          key: ${{ secrets.AZURE_VM_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -eu
+            cd /opt/projecttrack
+
+            if [ ! -f .env ]; then
+              echo 'Missing /opt/projecttrack/.env on the Azure VM.'
+              exit 1
+            fi
+
+            git fetch origin main
+            git reset --hard origin/main
+
+            docker compose config --quiet
+            docker compose up --build -d --remove-orphans
+
+            for attempt in $(seq 1 36); do
+              if curl --fail --silent http://localhost:5000/api/health > /tmp/projecttrack-health.json; then
+                cat /tmp/projecttrack-health.json
+                break
+              fi
+
+              if [ "$attempt" -eq 36 ]; then
+                echo 'Backend failed its post-deployment health check.'
+                docker compose ps
+                docker compose logs --tail=200 backend database redis
+                exit 1
+              fi
+
+              sleep 5
+            done
+
+            curl --fail --silent http://localhost:5173/health | grep -q 'ok'
+            docker compose ps
+            docker image prune -f

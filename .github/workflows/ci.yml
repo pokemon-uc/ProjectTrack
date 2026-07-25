@@ -1,0 +1,136 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-checks:
+    name: Backend checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Check backend JavaScript syntax
+        run: |
+          find backend \
+            -path 'backend/node_modules' -prune -o \
+            -name '*.js' -type f -print0 \
+            | xargs -0 -n1 node --check
+
+      - name: Validate OpenAPI document
+        working-directory: backend
+        run: node -e "require('yaml').parse(require('fs').readFileSync('docs/openapi.yaml', 'utf8')); console.log('OpenAPI YAML is valid')"
+
+  frontend-checks:
+    name: Frontend lint and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run ESLint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Build frontend
+        working-directory: frontend
+        env:
+          VITE_API_URL: http://localhost:5000/api
+        run: npm run build
+
+  compose-smoke-test:
+    name: Docker Compose smoke test
+    needs: [backend-checks, frontend-checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      DB_USER: postgres
+      DB_NAME: projecttrack_ci
+      DB_PASSWORD: ci_only_database_password_2026
+      JWT_SECRET: ci_only_jwt_secret_7f65a21f686f430a9d0b174bbd2346bc71974ee97446321701493ed144cb91ab
+      JWT_EXPIRES_IN: 15m
+      CLIENT_URL: http://localhost,http://localhost:5173,http://localhost:5000
+      VITE_API_URL: http://localhost:5000/api
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+
+      - name: Build and start complete stack
+        run: docker compose up --build -d
+
+      - name: Wait for backend health endpoint
+        run: |
+          for attempt in {1..36}; do
+            if curl --fail --silent http://localhost:5000/api/health > /tmp/backend-health.json; then
+              cat /tmp/backend-health.json
+              exit 0
+            fi
+            sleep 5
+          done
+          echo 'Backend did not become healthy in time.'
+          docker compose ps
+          docker compose logs --tail=200 backend database redis
+          exit 1
+
+      - name: Wait for frontend health endpoint
+        run: |
+          for attempt in {1..24}; do
+            if curl --fail --silent http://localhost:5173/health | grep -q 'ok'; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo 'Frontend did not become healthy in time.'
+          docker compose ps
+          docker compose logs --tail=200 frontend
+          exit 1
+
+      - name: Display service health
+        run: docker compose ps
+
+      - name: Show logs when smoke test fails
+        if: failure()
+        run: docker compose logs --tail=250
+
+      - name: Stop CI containers
+        if: always()
+        run: docker compose down -v --remove-orphans
